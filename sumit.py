@@ -4,144 +4,118 @@ import sqlite3
 from streamlit_javascript import st_javascript
 
 # --- DATABASE ENGINE ---
-def init_db():
-    conn = sqlite3.connect('vibrant_final_v4.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS portal_users 
-                 (email TEXT PRIMARY KEY, token TEXT, uid TEXT, user_agent TEXT, device_id TEXT)''')
-    conn.commit()
-    return conn
-
-conn = init_db()
+conn = sqlite3.connect('vibrant_final_bypass.db', check_same_thread=False)
 c = conn.cursor()
+c.execute('CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, token TEXT, uid TEXT, ua TEXT)')
+conn.commit()
 
-# --- BROWSER IDENTITY CAPTURE ---
-# Ye script user ke browser se uska asli User-Agent uthayegi
-user_agent = st_javascript("""window.navigator.userAgent""")
+# --- CONFIG FROM YOUR LOGS ---
+MOZILLA_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:123.0) Gecko/20100101 Firefox/123.0"
+VERCEL_IP = "76.76.21.21"
+ORIGIN_REF = "https://www.vibrantacademy.com/"
 
-st.set_page_config(page_title="Vibrant Anti-Block Pro", layout="wide")
+st.set_page_config(page_title="Vibrant Bypass Pro", layout="wide")
 
-if not user_agent:
-    st.info("🔄 System fingerprint verify ho raha hai... Kripya 2 second rukein.")
-    st.stop()
+# --- CUSTOM CSS (Hacker Dark Theme) ---
+st.markdown(f"""
+    <style>
+    .stApp {{ background-color: #0d1117; color: #c9d1d9; }}
+    .stSidebar {{ background-color: #161b22; border-right: 1px solid #30363d; }}
+    div[data-testid="stExpander"] {{ border: 1px solid #30363d; background: #0d1117; }}
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- MASTER API CALLER ---
-def make_vibrant_request(url, token=None, custom_ua=None):
-    # Agar database mein purana UA hai to wahi bhejenge (Spoofing)
-    headers = {
-        "User-Agent": custom_ua if custom_ua else user_agent,
-        "Accept": "application/json, text/plain, */*",
-        "Origin": "https://vibrantlive.vibrantacademy.com",
-        "Referer": "https://vibrantlive.vibrantacademy.com/",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Connection": "keep-alive"
-    }
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=15)
-        if response.status_code == 200:
-            return response.json()
-        return {"error": f"Status {response.status_code}", "raw": response.text}
-    except Exception as e:
-        return {"error": str(e)}
+st.title("🛡️ Vercel-React Stealth Engine")
+st.caption(f"Status: Connected to {VERCEL_IP} | UA: Mozilla Firefox")
 
-# --- UI DESIGN ---
-st.title("🛡️ Vibrant Premium Dashboard (Anti-403)")
-
-# Sidebar for Login & Accounts
+# --- SIDEBAR: LOGIN ---
 with st.sidebar:
-    st.header("👤 User Accounts")
+    st.header("🔑 Hijack Session")
+    u_email = st.text_input("Mobile/Email")
     
-    with st.expander("➕ Login New User"):
-        email_in = st.text_input("Email/Phone")
-        if st.button("Get OTP"):
-            res = make_vibrant_request(f"https://vibrantacademykotaapi.akamai.net.in/get/sendotp?phone={email_in}")
-            st.toast("OTP Sent!" if "error" not in res else "Error sending OTP")
-            
-        otp_in = st.text_input("Enter OTP", type="password")
-        if st.button("Verify & Secure Save"):
-            # Yahan hum device_id fix kar rahe hain taaki login stable rahe
-            d_id = f"VIBRANT_WEB_{email_in[:5]}"
-            v_url = f"https://vibrantacademykotaapi.akamai.net.in/get/otpverify?useremail={email_in}&otp={otp_in}&device_id={d_id}"
-            res = make_vibrant_request(v_url)
-            
+    # JavaScript Injection for OTP (Akamai bypass)
+    if st.button("GET OTP (Client-Inject)"):
+        # Hum Python ke bajaye user ke browser se request fire karenge
+        js_otp = f"""
+        fetch("https://vibrantacademykotaapi.akamai.net.in/get/sendotp?phone={u_email}", {{
+            headers: {{ 
+                "User-Agent": "{MOZILLA_UA}",
+                "Referer": "{ORIGIN_REF}"
+            }}
+        }}).then(r => console.log("OTP Hijacked"));
+        """
+        st_javascript(js_otp)
+        st.success("Target Hit! OTP Sent via Browser Engine.")
+
+    u_otp = st.text_input("Enter OTP", type="password")
+    if st.button("VERIFY & SAVE"):
+        # Verification using Spoofed Vercel Headers
+        v_url = f"https://vibrantacademykotaapi.akamai.net.in/get/otpverify?useremail={u_email}&otp={u_otp}&device_id=Vercel_React_Bypass_v1"
+        
+        headers = {
+            "User-Agent": MOZILLA_UA,
+            "Origin": ORIGIN_REF.strip('/'),
+            "Referer": ORIGIN_REF,
+            "X-Forwarded-For": VERCEL_IP,
+            "X-Real-IP": VERCEL_IP
+        }
+        
+        try:
+            res = requests.get(v_url, headers=headers).json()
             token = res.get('token') or res.get('data', {}).get('token')
             uid = res.get('user_id') or res.get('data', {}).get('user_id')
             
             if token:
-                c.execute('INSERT OR REPLACE INTO portal_users VALUES (?, ?, ?, ?, ?)', 
-                          (email_in, token, str(uid), user_agent, d_id))
+                c.execute('INSERT OR REPLACE INTO users VALUES (?, ?, ?, ?)', (u_email, token, str(uid), MOZILLA_UA))
                 conn.commit()
-                st.success("Account Saved! Reloading...")
+                st.success("Session Saved in Database!")
                 st.rerun()
             else:
-                st.error("Login Failed. Check OTP.")
+                st.error("Verification Blocked. Try again.")
+        except:
+            st.error("Connection Interrupted.")
 
-    # Account Selector
-    saved_emails = [row[0] for row in c.execute('SELECT email FROM portal_users').fetchall()]
-    if saved_emails:
-        selected_email = st.selectbox("Switch Active Account:", saved_emails)
-        c.execute('SELECT token, uid, user_agent, device_id FROM portal_users WHERE email=?', (selected_email,))
-        active_token, active_uid, active_ua, active_did = c.fetchone()
-    else:
-        active_token = None
+# --- MAIN DASHBOARD ---
+saved_accs = [row[0] for row in c.execute('SELECT email FROM users').fetchall()]
 
-# --- MAIN DASHBOARD LOGIC ---
-if active_token:
-    st.subheader(f"Welcome, {selected_email}")
+if saved_accs:
+    target = st.selectbox("Switch Account", saved_accs)
+    c.execute('SELECT token, uid FROM users WHERE email=?', (target,))
+    t_token, t_uid = c.fetchone()
     
-    # 1. Fetch Batches with SPOOFED User-Agent
-    b_url = f"https://vibrantacademykotaapi.akamai.net.in/get/get_user_liked_items?user_id={active_uid}"
-    batch_data = make_vibrant_request(b_url, token=active_token, custom_ua=active_ua)
+    m_headers = {
+        "Authorization": f"Bearer {t_token}",
+        "User-Agent": MOZILLA_UA,
+        "Referer": ORIGIN_REF,
+        "X-Forwarded-For": VERCEL_IP
+    }
     
-    if batch_data and "data" in batch_data:
-        batches = batch_data['data']
-        batch_names = [b['course_name'] for b in batches]
-        course_choice = st.selectbox("Chunye Apna Batch:", batch_names)
-        
-        selected_b_id = next(b['id'] for b in batches if b['course_name'] == course_choice)
+    # 1. Fetch Batches
+    b_res = requests.get(f"https://vibrantacademykotaapi.akamai.net.in/get/get_user_liked_items?user_id={t_uid}", headers=m_headers).json()
+    
+    if b_res.get('data'):
+        selected_b = st.selectbox("Select Batch", [b['course_name'] for b in b_res['data']])
+        b_id = next(b['id'] for b in b_res['data'] if b['course_name'] == selected_b)
         
         # 2. Fetch Content
-        l_url = f"https://vibrantacademykotaapi.akamai.net.in/get/get_batch_contents?batch_id={selected_b_id}"
-        lec_data = make_vibrant_request(l_url, token=active_token, custom_ua=active_ua)
+        l_res = requests.get(f"https://vibrantacademykotaapi.akamai.net.in/get/get_batch_contents?batch_id={b_id}", headers=m_headers).json()
+        lectures = l_res.get('data', {}).get('lectures') or l_res.get('data', [])
         
-        lectures = lec_data.get('data', {}).get('lectures') or lec_data.get('data', [])
-        
-        st.divider()
         for lec in lectures:
-            with st.expander(f"📖 {lec['title']}"):
-                col1, col2 = st.columns([3, 1])
+            with st.expander(f"🔓 {lec['title']}"):
+                # Video Detail Fetch
+                v_url = f"https://vibrantacademykotaapi.akamai.net.in/get/fetchVideoDetailsById?course_id={b_id}&video_id={lec['id']}&ytflag=0&folder_wise_course=1"
+                v_res = requests.get(v_url, headers=m_headers).json()
+                v_path = v_res.get('data', {}).get('video_path')
                 
-                # Fetch Real Video Link dynamically
-                v_id = lec['id']
-                v_detail_url = f"https://vibrantacademykotaapi.akamai.net.in/get/fetchVideoDetailsById?course_id={selected_b_id}&video_id={v_id}&ytflag=0&folder_wise_course=1"
-                v_res = make_vibrant_request(v_detail_url, token=active_token, custom_ua=active_ua)
-                
-                v_link = v_res.get('data', {}).get('video_path') if v_res else None
-                
-                with col1:
-                    if v_link:
-                        st.video(v_link)
-                    else:
-                        st.error("Video block hai ya link nahi mila.")
-                
-                with col2:
-                    st.write("Resources:")
-                    if lec.get('pdf_url'):
-                        st.link_button("📄 Open PDF", lec['pdf_url'])
-                    st.caption(f"ID: {v_id}")
-
+                if v_path:
+                    st.video(v_path)
+                st.link_button("📄 Notes", lec.get('pdf_url', '#'))
 else:
-    st.warning("👈 Sidebar se apna account login karein.")
+    st.info("👈 Sidebar se login hijack karein.")
 
-# --- ADMIN PANEL ---
-st.sidebar.divider()
-if st.sidebar.checkbox("Admin Panel (Secret)"):
-    pw = st.sidebar.text_input("Password", type="password")
-    if pw == "admin888":
-        st.write("### All Active Portal Users")
-        admin_data = c.execute('SELECT email, uid, user_agent FROM portal_users').fetchall()
-        import pandas as pd
-        st.table(pd.DataFrame(admin_data, columns=['Email', 'UID', 'Original User-Agent']))
+# --- ADMIN TERMINAL ---
+if st.sidebar.checkbox("Terminal Dashboard"):
+    if st.sidebar.text_input("Root Access", type="password") == "admin888":
+        st.write("### 🗄️ Database Logs")
+        st.table(c.execute('SELECT email, uid FROM users').fetchall())
