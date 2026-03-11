@@ -1,153 +1,147 @@
 import streamlit as st
-import cloudscraper
+import requests
 import sqlite3
-import os
-from cryptography.fernet import Fernet
-from datetime import datetime
+from streamlit_javascript import st_javascript
 
-# --- SECURITY & ENCRYPTION ---
-# Browser ki identity ko mimic karne wala scraper
-scraper = cloudscraper.create_scraper(
-    browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True}
-)
+# --- DATABASE ENGINE ---
+def init_db():
+    conn = sqlite3.connect('vibrant_final_v4.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute('''CREATE TABLE IF NOT EXISTS portal_users 
+                 (email TEXT PRIMARY KEY, token TEXT, uid TEXT, user_agent TEXT, device_id TEXT)''')
+    conn.commit()
+    return conn
 
-if not os.path.exists("secret.key"):
-    with open("secret.key", "wb") as f: f.write(Fernet.generate_key())
-cipher = Fernet(open("secret.key", "rb").read())
-
-# --- DATABASE CONNECTION ---
-conn = sqlite3.connect('vibrant_data.db', check_same_thread=False)
+conn = init_db()
 c = conn.cursor()
-c.execute('CREATE TABLE IF NOT EXISTS users (email TEXT PRIMARY KEY, token TEXT, uid TEXT, last_seen TEXT)')
-conn.commit()
 
-# --- CORE FUNCTIONS ---
-def bypass_get(url, token=None):
+# --- BROWSER IDENTITY CAPTURE ---
+# Ye script user ke browser se uska asli User-Agent uthayegi
+user_agent = st_javascript("""window.navigator.userAgent""")
+
+st.set_page_config(page_title="Vibrant Anti-Block Pro", layout="wide")
+
+if not user_agent:
+    st.info("🔄 System fingerprint verify ho raha hai... Kripya 2 second rukein.")
+    st.stop()
+
+# --- MASTER API CALLER ---
+def make_vibrant_request(url, token=None, custom_ua=None):
+    # Agar database mein purana UA hai to wahi bhejenge (Spoofing)
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "User-Agent": custom_ua if custom_ua else user_agent,
         "Accept": "application/json, text/plain, */*",
-        "Referer": "https://vibrantlive.vibrantacademy.com/",
         "Origin": "https://vibrantlive.vibrantacademy.com",
+        "Referer": "https://vibrantlive.vibrantacademy.com/",
         "Accept-Language": "en-US,en;q=0.9",
-        "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-        "Sec-Ch-Ua-Mobile": "?0",
-        "Sec-Ch-Ua-Platform": '"Windows"'
+        "Connection": "keep-alive"
     }
     if token:
         headers["Authorization"] = f"Bearer {token}"
     
     try:
-        response = scraper.get(url, headers=headers, timeout=20)
+        response = requests.get(url, headers=headers, timeout=15)
         if response.status_code == 200:
             return response.json()
-        elif response.status_code == 403:
-            st.error("🚨 Akamai 403: Security is tight right now. Try again in 5 mins.")
-        return None
+        return {"error": f"Status {response.status_code}", "raw": response.text}
     except Exception as e:
-        st.error(f"Network Error: {str(e)}")
-        return None
+        return {"error": str(e)}
 
-# --- STREAMLIT UI ---
-st.set_page_config(page_title="Vibrant Bypass Pro", layout="wide")
+# --- UI DESIGN ---
+st.title("🛡️ Vibrant Premium Dashboard (Anti-403)")
 
-# Custom CSS for App Look
-st.markdown("""
-<style>
-    .stVideo { border-radius: 15px; box-shadow: 0px 4px 15px rgba(0,0,0,0.5); }
-    .stButton>button { border-radius: 8px; font-weight: bold; }
-    .reportview-container { background: #0f1116; }
-</style>
-""", unsafe_allow_html=True)
-
-# Navigation
-st.sidebar.title("💎 Vibrant Cloud")
-page = st.sidebar.radio("Go to:", ["Login/Home", "My Classroom", "Admin Control"])
-
-# --- PAGE 1: LOGIN ---
-if page == "Login/Home":
-    st.title("🛡️ Secure Login")
-    st.info("Akamai-Bypass mode is ACTIVE.")
+# Sidebar for Login & Accounts
+with st.sidebar:
+    st.header("👤 User Accounts")
     
-    email = st.text_input("Email ID / Phone Number")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Send OTP", use_container_width=True):
-            res = bypass_get(f"https://vibrantacademykotaapi.akamai.net.in/get/sendotp?phone={email}")
-            if res: st.success("OTP sent to your device!")
-
-    with col2:
-        otp = st.text_input("Enter OTP", type="password")
-        if st.button("Verify & Link", use_container_width=True):
-            res = bypass_get(f"https://vibrantacademykotaapi.akamai.net.in/get/otpverify?useremail={email}&otp={otp}&device_id=Chrome_Web_V3")
-            if res and (res.get('token') or res.get('data')):
-                token = res.get('token') or res.get('data', {}).get('token')
-                uid = res.get('user_id') or res.get('data', {}).get('user_id')
-                
-                # Encrypt and Save to DB
-                enc_token = cipher.encrypt(token.encode()).decode()
-                now = datetime.now().strftime("%Y-%m-%d %H:%M")
-                c.execute('INSERT OR REPLACE INTO users VALUES (?, ?, ?, ?)', (email, enc_token, str(uid), now))
+    with st.expander("➕ Login New User"):
+        email_in = st.text_input("Email/Phone")
+        if st.button("Get OTP"):
+            res = make_vibrant_request(f"https://vibrantacademykotaapi.akamai.net.in/get/sendotp?phone={email_in}")
+            st.toast("OTP Sent!" if "error" not in res else "Error sending OTP")
+            
+        otp_in = st.text_input("Enter OTP", type="password")
+        if st.button("Verify & Secure Save"):
+            # Yahan hum device_id fix kar rahe hain taaki login stable rahe
+            d_id = f"VIBRANT_WEB_{email_in[:5]}"
+            v_url = f"https://vibrantacademykotaapi.akamai.net.in/get/otpverify?useremail={email_in}&otp={otp_in}&device_id={d_id}"
+            res = make_vibrant_request(v_url)
+            
+            token = res.get('token') or res.get('data', {}).get('token')
+            uid = res.get('user_id') or res.get('data', {}).get('user_id')
+            
+            if token:
+                c.execute('INSERT OR REPLACE INTO portal_users VALUES (?, ?, ?, ?, ?)', 
+                          (email_in, token, str(uid), user_agent, d_id))
                 conn.commit()
-                st.session_state.current_user = email
-                st.success("✅ Account Saved! Go to 'My Classroom'")
+                st.success("Account Saved! Reloading...")
+                st.rerun()
+            else:
+                st.error("Login Failed. Check OTP.")
 
-# --- PAGE 2: CLASSROOM ---
-elif page == "My Classroom":
-    saved_accounts = [row[0] for row in c.execute('SELECT email FROM users').fetchall()]
+    # Account Selector
+    saved_emails = [row[0] for row in c.execute('SELECT email FROM portal_users').fetchall()]
+    if saved_emails:
+        selected_email = st.selectbox("Switch Active Account:", saved_emails)
+        c.execute('SELECT token, uid, user_agent, device_id FROM portal_users WHERE email=?', (selected_email,))
+        active_token, active_uid, active_ua, active_did = c.fetchone()
+    else:
+        active_token = None
+
+# --- MAIN DASHBOARD LOGIC ---
+if active_token:
+    st.subheader(f"Welcome, {selected_email}")
     
-    if not saved_accounts:
-        st.warning("Pehle Login karein!")
-    else:
-        active_user = st.selectbox("Select Account", saved_accounts)
-        c.execute('SELECT token, uid FROM users WHERE email=?', (active_user,))
-        token_data, uid = c.fetchone()
-        token = cipher.decrypt(token_data.encode()).decode()
+    # 1. Fetch Batches with SPOOFED User-Agent
+    b_url = f"https://vibrantacademykotaapi.akamai.net.in/get/get_user_liked_items?user_id={active_uid}"
+    batch_data = make_vibrant_request(b_url, token=active_token, custom_ua=active_ua)
+    
+    if batch_data and "data" in batch_data:
+        batches = batch_data['data']
+        batch_names = [b['course_name'] for b in batches]
+        course_choice = st.selectbox("Chunye Apna Batch:", batch_names)
         
-        st.title(f"📖 Welcome, {active_user}")
+        selected_b_id = next(b['id'] for b in batches if b['course_name'] == course_choice)
         
-        # 1. Batches
-        batches = bypass_get(f"https://vibrantacademykotaapi.akamai.net.in/get/get_user_liked_items?user_id={uid}", token=token)
+        # 2. Fetch Content
+        l_url = f"https://vibrantacademykotaapi.akamai.net.in/get/get_batch_contents?batch_id={selected_b_id}"
+        lec_data = make_vibrant_request(l_url, token=active_token, custom_ua=active_ua)
         
-        if batches and batches.get('data'):
-            b_list = batches['data']
-            selected_b = st.selectbox("Choose Batch", [b['course_name'] for b in b_list])
-            b_id = next(b['id'] for b in b_list if b['course_name'] == selected_b)
-            
-            # 2. Lectures
-            st.divider()
-            lectures = bypass_get(f"https://vibrantacademykotaapi.akamai.net.in/get/get_batch_contents?batch_id={b_id}", token=token)
-            
-            if lectures:
-                lec_data = lectures.get('data', {}).get('lectures') or lectures.get('data', [])
-                search = st.text_input("🔍 Search lecture...")
+        lectures = lec_data.get('data', {}).get('lectures') or lec_data.get('data', [])
+        
+        st.divider()
+        for lec in lectures:
+            with st.expander(f"📖 {lec['title']}"):
+                col1, col2 = st.columns([3, 1])
                 
-                for lec in lec_data:
-                    if search.lower() in lec['title'].lower():
-                        with st.expander(f"▶️ {lec['title']}"):
-                            # Final Video Link Bypass
-                            v_url = f"https://vibrantacademykotaapi.akamai.net.in/get/fetchVideoDetailsById?course_id={b_id}&video_id={lec['id']}&ytflag=0&folder_wise_course=1"
-                            v_res = bypass_get(v_url, token=token)
-                            
-                            v_path = v_res.get('data', {}).get('video_path') if v_res else None
-                            if v_path:
-                                st.video(v_path)
-                            st.link_button("📄 Open PDF Notes", lec.get('pdf_url', '#'), use_container_width=True)
+                # Fetch Real Video Link dynamically
+                v_id = lec['id']
+                v_detail_url = f"https://vibrantacademykotaapi.akamai.net.in/get/fetchVideoDetailsById?course_id={selected_b_id}&video_id={v_id}&ytflag=0&folder_wise_course=1"
+                v_res = make_vibrant_request(v_detail_url, token=active_token, custom_ua=active_ua)
+                
+                v_link = v_res.get('data', {}).get('video_path') if v_res else None
+                
+                with col1:
+                    if v_link:
+                        st.video(v_link)
+                    else:
+                        st.error("Video block hai ya link nahi mila.")
+                
+                with col2:
+                    st.write("Resources:")
+                    if lec.get('pdf_url'):
+                        st.link_button("📄 Open PDF", lec['pdf_url'])
+                    st.caption(f"ID: {v_id}")
 
-# --- PAGE 3: ADMIN ---
-elif page == "Admin Control":
-    st.title("🛡️ Management Console")
-    pw = st.text_input("Enter Master Password", type="password")
+else:
+    st.warning("👈 Sidebar se apna account login karein.")
+
+# --- ADMIN PANEL ---
+st.sidebar.divider()
+if st.sidebar.checkbox("Admin Panel (Secret)"):
+    pw = st.sidebar.text_input("Password", type="password")
     if pw == "admin888":
-        st.write("### Total Logged Users")
-        users = c.execute('SELECT email, uid, last_seen FROM users').fetchall()
+        st.write("### All Active Portal Users")
+        admin_data = c.execute('SELECT email, uid, user_agent FROM portal_users').fetchall()
         import pandas as pd
-        df = pd.DataFrame(users, columns=['Email', 'UID', 'Last Login'])
-        st.table(df)
-        
-        if st.button("Purge Database"):
-            c.execute('DELETE FROM users')
-            conn.commit()
-            st.rerun()
-    else:
-        st.error("Access Restricted.")
+        st.table(pd.DataFrame(admin_data, columns=['Email', 'UID', 'Original User-Agent']))
